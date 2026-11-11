@@ -1,0 +1,15 @@
+{
+  "name": "gate",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "gate": "./bin/gate.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test tests/allow.test.ts tests/check.test.ts tests/ready.test.ts tests/arch.test.ts tests/cli.test.ts tests/pipeline.test.ts"
+  }
+}
