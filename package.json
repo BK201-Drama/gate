@@ -10,6 +10,6 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --experimental-strip-types --test tests/allow.test.ts tests/check.test.ts tests/ready.test.ts tests/arch.test.ts tests/cli.test.ts tests/pipeline.test.ts"
+    "test": "node --experimental-strip-types --test tests/allow.test.ts tests/check.test.ts tests/ready.test.ts tests/arch.test.ts tests/cli.test.ts tests/pipeline.test.ts tests/issue.test.ts tests/run-gate.test.ts"
   }
 }

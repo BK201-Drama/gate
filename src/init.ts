@@ -55,6 +55,48 @@ export function initProject(
   }
   write(cwd, "src/domain/.gitkeep", "", options.force, written);
   write(cwd, "GATE.md", gateCard(options.kind), options.force, written);
+  write(
+    cwd,
+    "scripts/run-gate.mjs",
+    fs.readFileSync(path.join(templateRoot, "run-gate.mjs")),
+    options.force,
+    written,
+  );
+  write(
+    cwd,
+    "scripts/install-git-hook.mjs",
+    fs.readFileSync(path.join(templateRoot, "install-git-hook.mjs")),
+    options.force,
+    written,
+  );
+  write(
+    cwd,
+    ".githooks/pre-commit",
+    fs.readFileSync(path.join(templateRoot, "pre-commit")),
+    options.force,
+    written,
+  );
+  write(
+    cwd,
+    ".cursor/hooks.json",
+    fs.readFileSync(path.join(templateRoot, "cursor-hooks.json")),
+    options.force,
+    written,
+  );
+  write(
+    cwd,
+    ".claude/settings.json",
+    fs.readFileSync(path.join(templateRoot, "claude-settings.json")),
+    options.force,
+    written,
+  );
+  write(
+    cwd,
+    ".codex/hooks.json",
+    fs.readFileSync(path.join(templateRoot, "codex-hooks.json")),
+    options.force,
+    written,
+  );
   write(cwd, "AGENTS.md", agentsMd(gate, options.kind), options.force, written);
   write(cwd, "CLAUDE.md", claudeMd(options.kind), options.force, written);
   write(
@@ -72,6 +114,13 @@ export function initProject(
     written,
   );
   mergePackage(cwd, options.kind, written);
+  ensureIgnore(cwd, [".gate/", "GATE.report.json"]);
+  const installedHook = spawnSync(
+    process.execPath,
+    [path.join(cwd, "scripts/install-git-hook.mjs")],
+    { cwd, encoding: "utf8" },
+  );
+  written.push(installedHook.status === 0 ? "git hook" : "git hook skipped");
   if (options.install) {
     const installed = spawnSync("npm", ["install"], {
       cwd,
@@ -81,6 +130,16 @@ export function initProject(
     written.push(installed.status === 0 ? "npm install" : "npm install failed");
   }
   return written;
+}
+
+function ensureIgnore(cwd: string, lines: string[]): void {
+  const target = path.join(cwd, ".gitignore");
+  const current = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : "";
+  const present = new Set(current.split(/\r?\n/));
+  const missing = lines.filter((line) => !present.has(line));
+  if (missing.length === 0) return;
+  const prefix = current.length === 0 || current.endsWith("\n") ? current : `${current}\n`;
+  fs.writeFileSync(target, `${prefix}${missing.join("\n")}\n`);
 }
 
 function write(
@@ -107,9 +166,16 @@ function mergePackage(cwd: string, kind: InitKind, written: string[]): void {
       ? {
           arch: "node scripts/arch.mjs",
           e2e: "playwright test",
+          gate: "node scripts/run-gate.mjs",
+          prepare: "node scripts/install-git-hook.mjs",
           dev: 'echo "add a dev server on 127.0.0.1:4173" && exit 1',
         }
-      : { arch: "node scripts/arch.mjs", e2e: "node e2e/usage-path.mjs" };
+      : {
+          arch: "node scripts/arch.mjs",
+          e2e: "node e2e/usage-path.mjs",
+          gate: "node scripts/run-gate.mjs",
+          prepare: "node scripts/install-git-hook.mjs",
+        };
   const devDependencies =
     kind === "web"
       ? { "dependency-cruiser": "^16.10.4", "@playwright/test": "^1.56.1" }
@@ -171,9 +237,9 @@ max_attempts: 3
 attempts: 0
 ---
 
-# 需求
+# 检查命令
 
-用 \`gate run "一句使用结果"\` 填写这一节。
+这里只登记长期检查，不写本次需求。需求在 Multica issue 上。
 `;
 }
 
@@ -226,24 +292,20 @@ try {
 function agentsMd(gate: string, kind: InitKind): string {
   return `# 本地 AI 代码流水线
 
-人在 Cursor 或 Claude Code 的对话里提出改动时，自己把功能做出来并跑通验收。不要中途问能不能执行命令。
+这个仓库有 \`GATE.md\`。不论使用哪一个 AI、平台或 harness，改完都要走过 gate。Cursor、Claude Code 和 Codex 的停止钩子，以及 git 提交钩子，都会运行 \`node scripts/run-gate.mjs\`。失败报告回到当前会话；按原文改，最多 3 轮，不要问人。第 3 轮仍失败，把报告留给人，不要再改。
 
-1. 改代码，让使用路径真的走通。${acceptanceLine(kind)}
-2. 运行 \`npm run arch\`，再运行 \`npm run e2e\`。
-3. 退出码不是 0：阅读这次命令的完整输出，自己改，再运行。最多 3 轮。
-4. 第 3 轮仍失败：停下，留下最后一次输出原文。
-5. 通过：说明改了哪些文件，以及这两条命令都是退出码 0。
+${acceptanceLine(kind)}
 
-不要放宽 \`.dependency-cruiser.cjs\`。不要用单元测试代替 \`npm run e2e\`。不要合并，不要部署。
+不要放宽 \`.dependency-cruiser.cjs\`。不要删掉 \`GATE.md\` 里的命令。不要用单元测试代替验收。不要合并，不要部署。
 
-人若执行 \`${gate} run "一句使用结果"\`，同样遵守上面的循环。复审会话只输出 \`VERDICT: pass\` 或 \`VERDICT: block\` 加原因，不改文件。
+人若在 Multica 发布了 issue，写完代码后运行 \`${gate} check --issue <issue-id>\`，结果会评论回那张 issue。不要把需求写进命令行。复审会话只输出 \`VERDICT: pass\` 或 \`VERDICT: block\` 加原因，不改文件。
 `;
 }
 
 function claudeMd(kind: InitKind): string {
   return `# 自发跑通
 
-对话里接到实现或修改请求后，按 \`AGENTS.md\` 自己改代码并循环运行 \`npm run arch\` 和 \`npm run e2e\`，最多 3 轮。不要把失败丢回给人，除非 3 轮后仍失败。
+对话里接到实现或修改请求后，自己改代码然后停。停止钩子会跑 \`scripts/run-gate.mjs\`。失败报告回到这个会话时按原文改，最多 3 轮。
 
 ${acceptanceLine(kind)}
 `;
@@ -261,12 +323,7 @@ description: 对话里改完代码后自己跑架构检查和验收，按失败�
 alwaysApply: true
 ---
 
-遵守 \`AGENTS.md\` 和 \`CLAUDE.md\`。人在对话里提出改动后：
-
-1. 实现使用路径。
-2. 运行 \`npm run arch\`，再运行 \`npm run e2e\`。
-3. 失败则阅读输出并修改，最多 3 轮，不要询问人。
-4. 第 3 轮仍失败才把最后一次输出留在回复里。
+遵守 \`AGENTS.md\` 和 \`CLAUDE.md\`。人在对话里提出改动后，自己实现，然后停。停止钩子会跑 gate。失败报告回到这个会话时按原文改，最多 3 轮，不要询问人。
 
 ${acceptanceLine(kind)}
 不要用单元测试代替验收。
@@ -290,7 +347,6 @@ jobs:
         with:
           node-version: 22
       - run: npm install
-${extra}      - run: npm run arch
-      - run: npm run e2e
+${extra}      - run: node scripts/run-gate.mjs
 `;
 }

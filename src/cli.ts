@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { allow } from "./allow.ts";
 import { GateRefuse, loadCard, reopen, saveCard } from "./card.ts";
 import { check, type Report, type Runner } from "./check.ts";
+import { demandFromIssue, parseIssueId } from "./issue.ts";
 import { initProject, type InitKind } from "./init.ts";
 import {
   executeRun,
@@ -23,6 +25,8 @@ type Io = {
   readReport: (filePath: string) => Report | null;
   writeReport: (filePath: string, report: Report) => void;
   spawnAgent: (prompt: string, mode: AgentMode) => AgentResult;
+  loadIssue: (id: string) => unknown;
+  commentOnIssue: (id: string, body: string) => void;
 };
 
 export function main(argv: string[], io?: Partial<Io>): number {
@@ -33,7 +37,7 @@ export function main(argv: string[], io?: Partial<Io>): number {
     if (command === "allow")
       return allowCommand(cardPath(rest, full.cwd), full);
     if (command === "check")
-      return checkCommand(cardPath(rest, full.cwd), full);
+      return checkCommand(cardPath(rest, full.cwd), rest, full);
     if (command === "ready")
       return readyCommand(cardPath(rest, full.cwd), full);
     if (command === "run") return runCommand(rest, full);
@@ -77,13 +81,15 @@ function allowCommand(filePath: string, io: Io): number {
   return result.code;
 }
 
-function checkCommand(filePath: string, io: Io): number {
+function checkCommand(filePath: string, rest: string[], io: Io): number {
   const card = loadCard(filePath);
   const result = check(card, io.run);
   if (result.report) {
     io.writeReport(reportPath(filePath), result.report);
     saveCard(card);
   }
+  const issueId = parseIssueId(rest.filter((arg) => arg.startsWith("--issue"))).id;
+  if (issueId) io.commentOnIssue(issueId, commentBody(result.message, result.report));
   io.stdout(`${result.message}\n`);
   return result.code;
 }
@@ -97,22 +103,27 @@ function readyCommand(filePath: string, io: Io): number {
 }
 
 function runCommand(rest: string[], io: Io): number {
-  const demand = rest
-    .filter((arg) => !arg.startsWith("--"))
-    .join(" ")
-    .trim();
+  const parsed = parseIssueId(rest);
+  if (!parsed.id) {
+    io.stdout(`${parsed.rejected}\n`);
+    return 2;
+  }
+  const demand = demandFromIssue(io.loadIssue(parsed.id));
+  if (!demand.trim()) {
+    io.stdout("refused: Multica issue 没有标题或正文\n");
+    return 2;
+  }
   const filePath = path.join(io.cwd, "GATE.md");
   if (fs.existsSync(filePath)) {
     const card = loadCard(filePath);
     reopen(card);
-    if (demand) card.body = `# 需求\n\n${demand}\n`;
     saveCard(card);
   }
   const result = executeRun({
     demand,
     maxAttempts: 3,
     allow: () => allow(loadCard(filePath)).code,
-    check: () => checkCommand(filePath, io),
+    check: () => checkCommand(filePath, [`--issue=${parsed.id}`], io),
     ready: () => readyCommand(filePath, io),
     isBlocked: () => loadCard(filePath).status === "blocked",
     reportText: () => {
@@ -125,6 +136,15 @@ function runCommand(rest: string[], io: Io): number {
   return result.code;
 }
 
+function commentBody(message: string, report: Report | undefined): string {
+  const failed = [
+    ...(report?.architecture ?? []),
+    ...(report?.acceptance ?? []),
+  ].filter((step) => step.exitCode !== 0);
+  const detail = failed.map((step) => `${step.command}\n${step.output}`).join("\n");
+  return [`gate ${message}`, detail].filter(Boolean).join("\n\n");
+}
+
 function cardPath(rest: string[], cwd: string): string {
   const given = rest.find((arg) => !arg.startsWith("--"));
   return given ? path.resolve(cwd, given) : path.join(cwd, "GATE.md");
@@ -132,6 +152,28 @@ function cardPath(rest: string[], cwd: string): string {
 
 function reportPath(filePath: string): string {
   return path.join(path.dirname(filePath), "GATE.report.json");
+}
+
+function loadIssueFromMultica(id: string): unknown {
+  const result = spawnSync("multica", ["issue", "get", id, "--output", "json"], {
+    encoding: "utf8",
+    shell: true,
+  });
+  if ((result.status ?? 1) !== 0) {
+    throw new GateRefuse(`refused: 读不到 Multica issue ${id}`);
+  }
+  return JSON.parse(result.stdout || "{}");
+}
+
+function commentOnMultica(id: string, body: string): void {
+  const dir = path.join(process.cwd(), ".gate");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "comment.md"), body);
+  spawnSync(
+    "multica",
+    ["issue", "comment", "add", id, "--content-file", ".gate/comment.md"],
+    { cwd: process.cwd(), encoding: "utf8", shell: true },
+  );
 }
 
 function defaultIo(over: Partial<Io> | undefined): Io {
@@ -148,6 +190,8 @@ function defaultIo(over: Partial<Io> | undefined): Io {
     writeReport: (filePath, report) =>
       fs.writeFileSync(filePath, JSON.stringify(report, null, 2) + "\n"),
     spawnAgent: (prompt, mode) => spawnCursor(process.cwd(), prompt, mode),
+    loadIssue: loadIssueFromMultica,
+    commentOnIssue: commentOnMultica,
     ...over,
   };
 }

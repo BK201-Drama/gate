@@ -1,6 +1,6 @@
 # gate
 
-本地 AI 代码流水线。`gate init` 把架构规则、使用路径验收和代理规矩布进项目。`gate run` 叫 Cursor CLI 按这个循环写，人不用守着对话。
+检查器。需求在 Multica issue 上发布。`gate` 只跑仓库里的架构扫描和验收，并把结果评论回那张 issue。
 
 ## 安装
 
@@ -17,27 +17,20 @@ cd my-app
 gate init --install
 ```
 
-小程序：
+小程序：`gate init --kind mini --install`。
+
+`GATE.md` 里只有长期检查命令，不写这一次要做什么。
+
+## 使用
+
+1. 在 Multica 创建 issue，例如标题「用户能完成预约」。
+2. 把 issue 派给编写代理。代理读 issue，在仓库里改代码。
+3. 写完后在项目目录执行：
 
 ```bash
-gate init --kind mini --install
+gate check --issue=MUL-12
 ```
 
-布上的东西：
+失败时，命令输出会作为评论写回 `MUL-12`。代理按评论里的原文改，再跑。通过后再验收。
 
-- `.dependency-cruiser.cjs`：循环依赖，以及 `src/domain` 不能引用 `ui` / `app` / `pages` / `api`。没装到 `node_modules` 时，`scripts/arch.mjs` 用同一套规则的内建检查。
-- 前后端：Playwright。`e2e/usage-path.spec.ts` 打开本地页面，要求出现 `data-testid="usage-ready"`。
-- 小程序：miniprogram-automator。打开 `/pages/index/index`，要求出现 `[data-usage-ready]`。
-- `AGENTS.md`、Cursor 规则、GitHub Actions。
-
-## 跑一条需求
-
-在项目目录：
-
-```bash
-gate run "用户能完成预约"
-```
-
-它会调用本机的 `agent`：编写，跑 `gate check`，失败就把报告交回去，最多 3 次。通过后另开一次只读复审。复审没有 `VERDICT: block`，才执行 `gate ready`。
-
-需要 Cursor CLI 已在 PATH 里，命令名是 `agent`。
+`gate run MUL-12` 会先读取这张 issue 的标题和正文，再按同一套检查循环调用 Cursor CLI。不要把需求原文放进这条命令。
